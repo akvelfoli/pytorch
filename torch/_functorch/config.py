@@ -13,6 +13,7 @@ import logging
 
 use_functionalize = True
 
+# Hack to compile through torch.set_rng_state
 use_fake_tensor = True
 
 # can be useful for debugging if we are incorrectly creating meta fake tensors
