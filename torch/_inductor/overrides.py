@@ -23,6 +23,7 @@ from . import config
 from .fx_utils import matches_module_function_pattern
 
 from .mkldnn import mkldnn_fuse_fx
+from torch._inductor.sdpa_pattern_rewriter import fuse_scaled_dot_product_attention
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +81,9 @@ def fuse_fx(gm: torch.fx.GraphModule, example_inputs):
         gm = linear_permute_fusion(gm)
         gm = permute_linear_fusion(gm)
         gm = permute_matmul_fusion(gm)
+
+    if config.scaled_dot_product_attention_fusion and config.pattern_matcher and not is_cpu:
+        gm = fuse_scaled_dot_product_attention(gm)
 
     # make sure the autograd is disabled.
     if torch.is_grad_enabled():

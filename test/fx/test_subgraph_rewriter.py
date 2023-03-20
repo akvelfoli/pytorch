@@ -4,19 +4,27 @@ import os
 import sys
 
 import torch
-from torch.fx import symbolic_trace, subgraph_rewriter
+from parameterized import param, parameterized, parameterized_class
+from torch.fx import Graph, GraphModule, subgraph_rewriter, symbolic_trace
 from torch.fx.annotate import annotate
+
 # Make the helper files in test/ importable
 from torch.fx.experimental.rewriter import RewritingTracer
 
 pytorch_test_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(pytorch_test_dir)
+from typing import Callable, List, Union
+
+from torch.fx.subgraph_rewriter import Match
+
 from torch.testing._internal.jit_utils import JitTestCase
 
-if __name__ == '__main__':
-    raise RuntimeError("This test file is not meant to be run directly, use:\n\n"
-                       "\tpython test/test_fx.py TESTNAME\n\n"
-                       "instead.")
+if __name__ == "__main__":
+    raise RuntimeError(
+        "This test file is not meant to be run directly, use:\n\n"
+        "\tpython test/test_fx.py TESTNAME\n\n"
+        "instead."
+    )
 
 @torch.fx.wrap
 def wrapped_gemm_bias_mul(a, b, bias):
@@ -30,7 +38,50 @@ def wrapped_gemm_bias_mul_with_c(a, b, bias, c):
     mul_res = lin_res * c
     return lin_res, mul_res
 
-class TestSubgraphRewriter(JitTestCase):
+# nuisance pattern and corresponding replacement for multi replacer
+def nuisance_pattern(a,b):
+    return torch.sqrt(a.sqrt()*0.144395 + b.pow(2.52113))
+
+def nuisance_replacement(a,b):
+    return a+b
+
+def replace_multi_pattern_impl(gm: GraphModule,
+    pattern: Union[Callable, GraphModule],
+    replacement: Union[Callable, GraphModule]
+) -> List[Match]:
+    # Wrapping subgraph_rewriter.replace_multiple_patterns_with_filters with a function
+    # that has same call signature as subgraph_rewriter.replace_pattern
+    if not isinstance(pattern, GraphModule):
+        pattern = symbolic_trace(pattern)
+    if not isinstance(replacement, GraphModule):
+        replacement = symbolic_trace(replacement)
+    return subgraph_rewriter.replace_multiple_patterns_with_filters(gm, { pattern : replacement, nuisance_pattern : nuisance_replacement }, match_filters=None)
+
+def replace_multi_pattern_with_filters_impl(gm: GraphModule,
+    pattern: Union[Callable, GraphModule],
+    replacement: Union[Callable, GraphModule],
+    match_filters: List[Callable[["InternalMatch", Graph, Graph], bool]],  # type: ignore[name-defined]
+) -> List[Match]:
+    # Wrapping subgraph_rewriter.replace_multiple_patterns_with_filters with a function
+    # that has same call signature as subgraph_rewriter.replace_pattern_with_filters
+    return subgraph_rewriter.replace_multiple_patterns_with_filters(gm, { pattern : replacement }, match_filters=match_filters)
+
+@parameterized_class([
+    # Parameterize unit test with
+    # Alternative implementation of subgraph_rewriter.replace_pattern,
+    # backed by subgraph_rewriter.replace_multiple_patterns_with_filters
+    # So that all tests in this unit test can be applied to both implementations
+    # without duplicating the code
+    {
+      "replace_pattern_impl": subgraph_rewriter.replace_pattern,
+      "replace_pattern_with_filters_impl": subgraph_rewriter.replace_pattern_with_filters,
+     },
+    {
+      "replace_pattern_impl": replace_multi_pattern_impl,
+      "replace_pattern_with_filters_impl": replace_multi_pattern_with_filters_impl,
+    },
+], class_name_func=lambda cls, idx, input: ["TestSubgraphRewriter", "TestSubgraphMultiRewriter"][idx])
+class TestSubgraphRewriterParameterized(JitTestCase):
 
     def test_subgraph_rewriter_preserves_logic(self):
         class M(torch.nn.Module):
@@ -52,7 +103,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         # Replace `pattern` with the same pattern (shouldn't change
         # the underlying logic)
-        subgraph_rewriter.replace_pattern(traced, pattern, pattern)
+        type(self).replace_pattern_impl(traced, pattern, pattern)
 
         traced.graph.lint()
 
@@ -81,7 +132,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.rand(1, 3)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -110,7 +161,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.rand(1, 3)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -143,7 +194,7 @@ class TestSubgraphRewriter(JitTestCase):
         w1 = torch.rand(1, 3)
         w2 = torch.rand(1, 3)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -168,7 +219,7 @@ class TestSubgraphRewriter(JitTestCase):
         x = torch.randn(3, 4)
         y = torch.randn(4, 5)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, pattern)
+        type(self).replace_pattern_impl(traced, pattern, pattern)
 
         traced.graph.lint()
 
@@ -198,7 +249,7 @@ class TestSubgraphRewriter(JitTestCase):
         x = torch.randn(4, 4)
         y = torch.randn(4, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -231,7 +282,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, traced_pattern, traced_replacement)
+        type(self).replace_pattern_impl(traced, traced_pattern, traced_replacement)
 
         traced.graph.lint()
 
@@ -258,7 +309,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -287,7 +338,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -384,7 +435,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -436,7 +487,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, Pattern(), Replacement())
+        type(self).replace_pattern_impl(traced, Pattern(), Replacement())
 
         traced.graph.lint()
 
@@ -496,7 +547,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -529,7 +580,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -538,6 +589,9 @@ class TestSubgraphRewriter(JitTestCase):
         self.assertEqual(ref_outs, test_outs)
 
     def test_subgraph_rewriter_replace_with_multiple_outputs(self):
+        if type(self).__name__=="TestSubgraphMultiRewriter":
+            # This test does not work with multi pattern rewriter, as the example has multiple anchors
+            self.skipTest("Multiple anchors not supported for subgraph multi replace")
 
         def f(x):
             y = torch.sigmoid(x)
@@ -562,7 +616,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -571,6 +625,9 @@ class TestSubgraphRewriter(JitTestCase):
         self.assertEqual(ref_outs, test_outs)
 
     def test_subgraph_rewriter_replace_with_duplicated_outputs(self):
+        if type(self).__name__=="TestSubgraphMultiRewriter":
+            # This test does not work with multi pattern rewriter, as the example has multiple anchors
+            self.skipTest("Multiple anchors not supported for subgraph multi replace")
 
         def f(x1, x2):
             x = x1 - x2
@@ -599,7 +656,7 @@ class TestSubgraphRewriter(JitTestCase):
         x1 = torch.randn(3, 4)
         x2 = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -627,8 +684,7 @@ class TestSubgraphRewriter(JitTestCase):
         x1 = torch.randn(3, 4)
         x2 = torch.randn(3, 4)
         x3 = torch.randn(3, 4)
-
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
         placeholder_nodes = [n for n in traced.graph.nodes if n.op == "placeholder"]
@@ -661,7 +717,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         x1 = torch.randn(3, 4)
 
-        subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        type(self).replace_pattern_impl(traced, pattern, replacement)
 
         traced.graph.lint()
 
@@ -670,6 +726,9 @@ class TestSubgraphRewriter(JitTestCase):
         self.assertEqual(ref_outs, test_outs)
 
     def test_subgraph_rewriter_nodes_with_kwargs(self):
+        if type(self).__name__=="TestSubgraphMultiRewriter":
+            # This test does not work with multi pattern rewriter, as the example has multiple anchors
+            self.skipTest("Multiple anchors not supported for subgraph multi replace")
 
         class M(torch.nn.Module):
             def __init__(self) -> None:
@@ -693,7 +752,7 @@ class TestSubgraphRewriter(JitTestCase):
             return lin_res, mul_res
 
         traced = symbolic_trace(M())
-        matches = subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        matches = type(self).replace_pattern_impl(traced, pattern, replacement)
 
         self.assertEqual(len(matches), 1)
 
@@ -711,6 +770,9 @@ class TestSubgraphRewriter(JitTestCase):
         # Anchor 1 and 3 is a real match, but anchor 2 is not.
         # The subgraph rewriter should be able to revert the changes made while matching anchor 2.
         # Final match with anchor 3 should be successful.
+        if type(self).__name__=="TestSubgraphMultiRewriter":
+            # This test does not work with multi pattern rewriter, as the example has multiple anchors
+            self.skipTest("Multiple anchors not supported for subgraph multi replace")
 
         class M(torch.nn.Module):
             def __init__(self) -> None:
@@ -759,6 +821,7 @@ class TestSubgraphRewriter(JitTestCase):
             return lin_res, mul_res
 
         traced = symbolic_trace(M())
+
         matches = subgraph_rewriter.replace_pattern(
             traced,
             gemm_bias_mul_pattern_with_c,
@@ -825,7 +888,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         # match without filter, should find 2 match
         traced = symbolic_trace(M())
-        matches = subgraph_rewriter.replace_pattern_with_filters(
+        matches = type(self).replace_pattern_with_filters_impl(
             traced,
             BinaryOpScalarReLUPattern,
             BinaryOpScalarReLUReplacement,
@@ -835,7 +898,7 @@ class TestSubgraphRewriter(JitTestCase):
 
         # match with filter, should find 1 match
         traced = symbolic_trace(M())
-        matches = subgraph_rewriter.replace_pattern_with_filters(
+        matches = type(self).replace_pattern_with_filters_impl(
             traced,
             BinaryOpScalarReLUPattern,
             BinaryOpScalarReLUReplacement,
@@ -855,7 +918,7 @@ class TestSubgraphRewriter(JitTestCase):
             return torch.ops.aten._reshape_alias_copy.default(x, arg1, arg0)
 
         traced = symbolic_trace(M())
-        matches = subgraph_rewriter.replace_pattern(traced, pattern, replacement)
+        matches = type(self).replace_pattern_impl(traced, pattern, replacement)
 
         self.assertEqual(len(matches), 1)
 
