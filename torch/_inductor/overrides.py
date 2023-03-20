@@ -35,21 +35,25 @@ class AutogradMonkeypatch(TorchFunctionMode):
             config.fallback_random
             and replacements[func] in replacements_using_triton_random
         ):
-            return replacements[func](*args, **kwargs)
+            if func != torch.nn.functional.dropout or (
+                func == torch.nn.functional.dropout
+                and args[0].device != torch.device("cpu")
+            ):
+                return replacements[func](*args, **kwargs)
         return func(*args, **kwargs)
 
 
 patch_functions = AutogradMonkeypatch
 
 
-def replace_fx(gm: torch.fx.GraphModule):
+def replace_fx(gm: torch.fx.GraphModule, example_inputs):
     # Sometimes patch_functions() misses things already in the graph
     for node in reversed(list(gm.graph.nodes)):
         if node.op == "call_function" and node.target in replacements:
             if (
                 config.fallback_random
-                and replacements[node.target] in replacements_using_triton_random
-            ):
+                or example_inputs[0].device == torch.device("cpu")
+            ) and replacements[node.target] in replacements_using_triton_random:
                 continue
             with gm.graph.inserting_before(node):
                 node.replace_all_uses_with(
